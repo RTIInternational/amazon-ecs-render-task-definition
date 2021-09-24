@@ -47,7 +47,6 @@ async function run() {
     const { envPath, taskDefPath } = validateInput(envInputFilepath, taskdefInputFilepath)
 
     const newEnv = transformEnv(envPath)
-    core.info("newEnv", newEnv)
     const taskDefContents = require(taskDefPath);
 
     // Insert the image URI and environment variables
@@ -60,9 +59,7 @@ async function run() {
     if (!containerDef) {
       throw new Error('Invalid task definition: Could not find container definition with matching name');
     }
-    core.info("containerDef.environment", containerDef.environment)
     containerDef.environment = newEnv;
-    core.info("containerDef.environment", containerDef.environment)
     containerDef.image = imageURI;
 
     // Write out a new task definition file
@@ -73,7 +70,6 @@ async function run() {
       keep: true,
       discardDescriptor: true
     });
-    core.info("taskDefContents", taskDefContents)
     const newTaskDefContents = JSON.stringify(taskDefContents, null, 2);
     fs.writeFileSync(updatedTaskDefFile.name, newTaskDefContents);
     core.setOutput('task-definition', updatedTaskDefFile.name);
