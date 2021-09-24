@@ -18,6 +18,7 @@ function transformEnv(envPath) {
           "value": env[key]
       })
   }
+  return output
 }
 
 // Validates input filepaths and returns them
