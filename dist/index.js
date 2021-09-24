@@ -138,6 +138,131 @@ function onceStrict (fn) {
 
 /***/ }),
 
+/***/ 63:
+/***/ (function(module, __unusedexports, __webpack_require__) {
+
+/* @flow */
+/*::
+
+type DotenvParseOptions = {
+  debug?: boolean
+}
+
+// keys and values from src
+type DotenvParseOutput = { [string]: string }
+
+type DotenvConfigOptions = {
+  path?: string, // path to .env file
+  encoding?: string, // encoding of .env file
+  debug?: string // turn on logging for debugging purposes
+}
+
+type DotenvConfigOutput = {
+  parsed?: DotenvParseOutput,
+  error?: Error
+}
+
+*/
+
+const fs = __webpack_require__(747)
+const path = __webpack_require__(622)
+const os = __webpack_require__(87)
+
+function log (message /*: string */) {
+  console.log(`[dotenv][DEBUG] ${message}`)
+}
+
+const NEWLINE = '\n'
+const RE_INI_KEY_VAL = /^\s*([\w.-]+)\s*=\s*(.*)?\s*$/
+const RE_NEWLINES = /\\n/g
+const NEWLINES_MATCH = /\r\n|\n|\r/
+
+// Parses src into an Object
+function parse (src /*: string | Buffer */, options /*: ?DotenvParseOptions */) /*: DotenvParseOutput */ {
+  const debug = Boolean(options && options.debug)
+  const obj = {}
+
+  // convert Buffers before splitting into lines and processing
+  src.toString().split(NEWLINES_MATCH).forEach(function (line, idx) {
+    // matching "KEY' and 'VAL' in 'KEY=VAL'
+    const keyValueArr = line.match(RE_INI_KEY_VAL)
+    // matched?
+    if (keyValueArr != null) {
+      const key = keyValueArr[1]
+      // default undefined or missing values to empty string
+      let val = (keyValueArr[2] || '')
+      const end = val.length - 1
+      const isDoubleQuoted = val[0] === '"' && val[end] === '"'
+      const isSingleQuoted = val[0] === "'" && val[end] === "'"
+
+      // if single or double quoted, remove quotes
+      if (isSingleQuoted || isDoubleQuoted) {
+        val = val.substring(1, end)
+
+        // if double quoted, expand newlines
+        if (isDoubleQuoted) {
+          val = val.replace(RE_NEWLINES, NEWLINE)
+        }
+      } else {
+        // remove surrounding whitespace
+        val = val.trim()
+      }
+
+      obj[key] = val
+    } else if (debug) {
+      log(`did not match key and value when parsing line ${idx + 1}: ${line}`)
+    }
+  })
+
+  return obj
+}
+
+function resolveHome (envPath) {
+  return envPath[0] === '~' ? path.join(os.homedir(), envPath.slice(1)) : envPath
+}
+
+// Populates process.env from .env file
+function config (options /*: ?DotenvConfigOptions */) /*: DotenvConfigOutput */ {
+  let dotenvPath = path.resolve(process.cwd(), '.env')
+  let encoding /*: string */ = 'utf8'
+  let debug = false
+
+  if (options) {
+    if (options.path != null) {
+      dotenvPath = resolveHome(options.path)
+    }
+    if (options.encoding != null) {
+      encoding = options.encoding
+    }
+    if (options.debug != null) {
+      debug = true
+    }
+  }
+
+  try {
+    // specifying an encoding returns a string instead of a buffer
+    const parsed = parse(fs.readFileSync(dotenvPath, { encoding }), { debug })
+
+    Object.keys(parsed).forEach(function (key) {
+      if (!Object.prototype.hasOwnProperty.call(process.env, key)) {
+        process.env[key] = parsed[key]
+      } else if (debug) {
+        log(`"${key}" is already defined in \`process.env\` and will not be overwritten`)
+      }
+    })
+
+    return { parsed }
+  } catch (e) {
+    return { error: e }
+  }
+}
+
+module.exports.config = config
+module.exports.parse = parse
+
+
+/***/ }),
+
 /***/ 82:
 /***/ (function(__unusedmodule, exports) {
 
@@ -1173,28 +1298,57 @@ exports.issueCommand = issueCommand;
 /***/ 104:
 /***/ (function(module, __unusedexports, __webpack_require__) {
 
-const path = __webpack_require__(622);
 const core = __webpack_require__(470);
+const dotenv = __webpack_require__(63)
 const tmp = __webpack_require__(150);
 const fs = __webpack_require__(747);
+const path = __webpack_require__(622);
+
+// Reads the env file and transforms it to array of JSON objects
+function transformEnv(envPath) {
+  const result = dotenv.config({ path: envPath })
+  if (result.error) {
+    throw result.error
+  }
+  const env = result.parsed
+  let output = []
+  for (const key in env) {
+      output.push({
+          "name": key,
+          "value": env[key]
+      })
+  }
+}
+
+// Validates input filepaths and returns them
+function validateInput(envInputFilepath, taskdefInputFilepath) {
+  const envPath = path.isAbsolute(envInputFilepath) ?
+      envInputFilepath :
+      path.join(process.env.GITHUB_WORKSPACE, envInputFilepath);
+  if (!fs.existsSync(envPath)) {
+      throw new Error(`Env file does not exist: ${envPath}`);
+  }
+  const taskDefPath = path.isAbsolute(taskdefInputFilepath) ?
+  taskdefInputFilepath :
+    path.join(process.env.GITHUB_WORKSPACE, taskdefInputFilepath);
+  if (!fs.existsSync(taskDefPath)) {
+    throw new Error(`Task definition file does not exist: ${taskDefPath}`);
+  }
+  return {envPath, taskDefPath}
+}
 
 async function run() {
   try {
-    // Get inputs
-    const taskDefinitionFile = core.getInput('task-definition', { required: true });
     const containerName = core.getInput('container-name', { required: true });
+    const envInputFilepath = core.getInput('env-file', { required: true });
+    const taskdefInputFilepath = core.getInput('task-definition', { required: true });
     const imageURI = core.getInput('image', { required: true });
+    const { envPath, taskDefPath } = validateInput(envInputFilepath, taskdefInputFilepath)
 
-    // Parse the task definition
-    const taskDefPath = path.isAbsolute(taskDefinitionFile) ?
-      taskDefinitionFile :
-      path.join(process.env.GITHUB_WORKSPACE, taskDefinitionFile);
-    if (!fs.existsSync(taskDefPath)) {
-      throw new Error(`Task definition file does not exist: ${taskDefinitionFile}`);
-    }
+    const newEnv = transformEnv(envPath)
     const taskDefContents = require(taskDefPath);
 
-    // Insert the image URI
+    // Insert the image URI and environment variables
     if (!Array.isArray(taskDefContents.containerDefinitions)) {
       throw new Error('Invalid task definition format: containerDefinitions section is not present or is not an array');
     }
@@ -1204,6 +1358,7 @@ async function run() {
     if (!containerDef) {
       throw new Error('Invalid task definition: Could not find container definition with matching name');
     }
+    containerDef.environment = newEnv;
     containerDef.image = imageURI;
 
     // Write out a new task definition file
@@ -1217,11 +1372,11 @@ async function run() {
     const newTaskDefContents = JSON.stringify(taskDefContents, null, 2);
     fs.writeFileSync(updatedTaskDefFile.name, newTaskDefContents);
     core.setOutput('task-definition', updatedTaskDefFile.name);
-  }
-  catch (error) {
+  } catch (error) {
     core.setFailed(error.message);
   }
 }
+
 
 module.exports = run;
 
